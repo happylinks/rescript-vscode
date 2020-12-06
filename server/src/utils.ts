@@ -1,3 +1,4 @@
+import { Range } from "vscode-languageserver-textdocument";
 import * as c from "./constants";
 import * as childProcess from "child_process";
 import * as p from "vscode-languageserver-protocol";
@@ -22,14 +23,14 @@ export let findProjectRootOfFile = (
 ): null | p.DocumentUri => {
   let dir = path.dirname(source);
   if (fs.existsSync(path.join(dir, c.bsconfigPartialPath))) {
-    return dir;
+	return dir;
   } else {
-    if (dir === source) {
-      // reached top
-      return null;
-    } else {
-      return findProjectRootOfFile(dir);
-    }
+	if (dir === source) {
+	  // reached top
+	  return null;
+	} else {
+	  return findProjectRootOfFile(dir);
+	}
   }
 };
 
@@ -49,26 +50,26 @@ export let findBscExeDirOfFile = (
   let dir = path.dirname(source);
   let bscPath = path.join(dir, c.bscExePartialPath);
   if (fs.existsSync(bscPath)) {
-    return dir;
+	return dir;
   } else {
-    if (dir === source) {
-      // reached the top
-      return null;
-    } else {
-      return findBscExeDirOfFile(dir);
-    }
+	if (dir === source) {
+	  // reached the top
+	  return null;
+	} else {
+	  return findBscExeDirOfFile(dir);
+	}
   }
 };
 
-type execResult =
+export type execResult =
   | {
-    kind: "success";
-    result: string;
-  }
+	  kind: "success";
+	  result: string;
+	}
   | {
-    kind: "error";
-    error: string;
-  };
+	  kind: "error";
+	  error: string;
+	};
 export let formatUsingValidBscPath = (
   code: string,
   bscPath: p.DocumentUri,
@@ -77,26 +78,78 @@ export let formatUsingValidBscPath = (
   let extension = isInterface ? c.resiExt : c.resExt;
   let formatTempFileFullPath = createFileInTempDir(extension);
   fs.writeFileSync(formatTempFileFullPath, code, {
-    encoding: "utf-8",
+	encoding: "utf-8",
   });
   try {
-    let result = childProcess.execFileSync(
-      bscPath,
-      ["-color", "never", "-format", formatTempFileFullPath],
-      { stdio: "pipe" }
-    );
-    return {
-      kind: "success",
-      result: result.toString(),
-    };
+	let result = childProcess.execFileSync(
+	  bscPath,
+	  ["-color", "never", "-format", formatTempFileFullPath],
+	  { stdio: "pipe" }
+	);
+	return {
+	  kind: "success",
+	  result: result.toString(),
+	};
   } catch (e) {
-    return {
-      kind: "error",
-      error: e.message,
-    };
+	return {
+	  kind: "error",
+	  error: e.message,
+	};
   } finally {
-    // async close is fine. We don't use this file name again
-    fs.unlink(formatTempFileFullPath, () => null);
+	// async close is fine. We don't use this file name again
+	fs.unlink(formatTempFileFullPath, () => null);
+  }
+};
+
+export let formatUsingRefmt = (
+  code: string,
+  projectRootPath: p.DocumentUri,
+  bscPath: p.DocumentUri,
+  isInterface: boolean
+): execResult => {
+  let extension = isInterface ? c.reiExt : c.reExt;
+  let formatTempFileFullPath = createFileInTempDir(extension);
+  let refmtPath;
+  try {
+	let bsconfig = JSON.parse(
+	  fs.readFileSync(path.join(projectRootPath, c.bsconfigPartialPath), {
+		encoding: "utf-8",
+	  })
+	);
+
+	if (typeof bsconfig.refmt === "string") {
+	  refmtPath = path.join(projectRootPath, bsconfig.refmt);
+	}
+  } finally {
+	if (!refmtPath) {
+	  refmtPath = path.join(path.dirname(bscPath), "refmt.exe");
+	}
+  }
+
+  fs.writeFileSync(formatTempFileFullPath, code, {
+	encoding: "utf-8",
+  });
+
+  try {
+	let result = childProcess.execFileSync(
+	  refmtPath,
+	  ["--interface", JSON.stringify(isInterface), formatTempFileFullPath],
+	  { stdio: "pipe" }
+	);
+
+	// Write to output.
+	return {
+	  kind: "success",
+	  result: result.toString(),
+	};
+  } catch (e) {
+	return {
+	  kind: "error",
+	  error: e.message,
+	};
+  } finally {
+	// async close is fine. We don't use this file name again
+	fs.unlink(formatTempFileFullPath, () => null);
   }
 };
 
@@ -104,15 +157,10 @@ export let runBsbWatcherUsingValidBsbPath = (
   bsbPath: p.DocumentUri,
   projectRootPath: p.DocumentUri
 ) => {
-  if (process.platform === "win32") {
-    return childProcess.exec(`${bsbPath}.cmd -w`, {
-      cwd: projectRootPath,
-    });
-  } else {
-    return childProcess.execFile(bsbPath, ["-w"], {
-      cwd: projectRootPath,
-    });
-  }
+  let process = childProcess.execFile(bsbPath, ["-w"], {
+	cwd: projectRootPath,
+  });
+  return process;
   // try {
   // 	let result = childProcess.execFileSync(bsbPath, [], { stdio: 'pipe', cwd: projectRootPath })
   // 	return {
@@ -127,108 +175,37 @@ export let runBsbWatcherUsingValidBsbPath = (
   // }
 };
 
-// Logic for parsing .compiler.log
-/* example .compiler.log content:
+export let parseDiagnosticLocation = (location: string): Range => {
+  // example output location:
+  // 3:9
+  // 3:5-8
+  // 3:9-6:1
 
-#Start(1600519680823)
-
-  Syntax error!
-  /Users/chenglou/github/reason-react/src/test.res:1:8-2:3
-
-  1 │ let a =
-  2 │ let b =
-  3 │
-
-  This let-binding misses an expression
-
-
-  Warning number 8
-  /Users/chenglou/github/reason-react/src/test.res:3:5-8
-
-  1 │ let a = j`😀`
-  2 │ let b = `😀`
-  3 │ let None = None
-  4 │ let bla: int = "
-  5 │   hi
-
-  You forgot to handle a possible case here, for example:
-  Some _
-
-
-  We've found a bug for you!
-  /Users/chenglou/github/reason-react/src/test.res:3:9
-
-  1 │ let a = 1
-  2 │ let b = "hi"
-  3 │ let a = b + 1
-
-  This has type: string
-  Somewhere wanted: int
-
-#Done(1600519680836)
-*/
-
-// parser helper
-let parseFileAndRange = (fileAndRange: string) => {
-  // https://github.com/rescript-lang/rescript-compiler/blob/0a3f4bb32ca81e89cefd5a912b8795878836f883/jscomp/super_errors/super_location.ml#L19-L25
-  /* The file + location format can be:
-    a/b.res:10:20
-    a/b.res:10:20-21     <- last number here is the end char of line 10
-    a/b.res:10:20-30:11
-  */
-  let regex = /(.+)\:(\d+)\:(\d+)(-(\d+)(\:(\d+))?)?$/;
-  /*            ^^ file
-                      ^^^ start line
-                             ^^^ start character
-                                  ^ optional range
-                                    ^^^ end line or chararacter
-                                            ^^^ end character
-  */
-  // it's not possible that this regex fails. If it does, something's wrong in the caller
-  let [
-    _source,
-    file,
-    startLine,
-    startChar,
-    optionalEndGroup,
-    endLineOrChar,
-    _colonPlusEndCharOrNothing,
-    endCharOrNothing,
-  ] = fileAndRange.trim().match(regex)!;
-  // for the trimming, see https://github.com/rescript-lang/rescript-vscode/pull/71#issuecomment-769160576
-
-  // language-server position is 0-based. Ours is 1-based. Convert
+  // language-server position is 0-based. Ours is 1-based. Don't forget to convert
   // also, our end character is inclusive. Language-server's is exclusive
-  let range;
-  if (optionalEndGroup == null) {
-    let start = {
-      line: parseInt(startLine) - 1,
-      character: parseInt(startChar),
-    };
-    range = {
-      start: start,
-      end: start,
-    };
+  let isRange = location.indexOf("-") >= 0;
+  if (isRange) {
+	let [from, to] = location.split("-");
+	let [fromLine, fromChar] = from.split(":");
+	let isSingleLine = to.indexOf(":") >= 0;
+	let [toLine, toChar] = isSingleLine ? to.split(":") : [fromLine, to];
+	return {
+	  start: {
+		line: parseInt(fromLine) - 1,
+		character: parseInt(fromChar) - 1,
+	  },
+	  end: { line: parseInt(toLine) - 1, character: parseInt(toChar) },
+	};
   } else {
-    let isSingleLine = endCharOrNothing == null;
-    let [endLine, endChar] = isSingleLine
-      ? [startLine, endLineOrChar]
-      : [endLineOrChar, endCharOrNothing];
-    range = {
-      start: {
-        line: parseInt(startLine) - 1,
-        character: parseInt(startChar) - 1,
-      },
-      end: { line: parseInt(endLine) - 1, character: parseInt(endChar) },
-    };
+	let [line, char] = location.split(":");
+	let start = { line: parseInt(line) - 1, character: parseInt(char) };
+	return {
+	  start: start,
+	  end: start,
+	};
   }
-  return {
-    file: process.platform === "win32" ? `file:\\\\\\${file}` : file,
-    range,
-  };
 };
 
-// main parsing logic
 type filesDiagnostics = {
   [key: string]: p.Diagnostic[];
 };
@@ -239,98 +216,139 @@ type parsedCompilerLogResult = {
 export let parseCompilerLogOutput = (
   content: string
 ): parsedCompilerLogResult => {
+  /* example .compiler.log file content that we're gonna parse:
+
+#Start(1600519680823)
+
+	Syntax error!
+	/Users/chenglou/github/reason-react/src/test.res:1:8-2:3
+
+	1 │ let a =
+	2 │ let b =
+	3 │
+
+	This let-binding misses an expression
+
+
+	Warning number 8
+	/Users/chenglou/github/reason-react/src/test.res:3:5-8
+
+	1 │ let a = j`😀`
+	2 │ let b = `😀`
+	3 │ let None = None
+	4 │ let bla: int = "
+	5 │   hi
+
+	You forgot to handle a possible case here, for example:
+	Some _
+
+
+	We've found a bug for you!
+	/Users/chenglou/github/reason-react/src/test.res:3:9
+
+	1 │ let a = 1
+	2 │ let b = "hi"
+	3 │ let a = b + 1
+
+	This has type: string
+	Somewhere wanted: int
+
+#Done(1600519680836)
+	*/
+
   type parsedDiagnostic = {
-    code: number | undefined;
-    severity: t.DiagnosticSeverity;
-    tag: t.DiagnosticTag | undefined;
-    content: string[];
+	code: number | undefined;
+	severity: t.DiagnosticSeverity;
+	tag: t.DiagnosticTag | undefined;
+	content: string[];
   };
   let parsedDiagnostics: parsedDiagnostic[] = [];
-  let lines = content.split(os.EOL);
+  let lines = content.split("\n");
   let done = false;
 
   for (let i = 0; i < lines.length; i++) {
-    let line = lines[i];
-    if (line.startsWith("  We've found a bug for you!")) {
-      parsedDiagnostics.push({
-        code: undefined,
-        severity: t.DiagnosticSeverity.Error,
-        tag: undefined,
-        content: [],
-      });
-    } else if (line.startsWith("  Warning number ")) {
-      let warningNumber = parseInt(line.slice("  Warning number ".length));
-      let tag: t.DiagnosticTag | undefined = undefined;
-      switch (warningNumber) {
-        case 11:
-        case 20:
-        case 26:
-        case 27:
-        case 32:
-        case 33:
-        case 34:
-        case 35:
-        case 36:
-        case 37:
-        case 38:
-        case 39:
-        case 60:
-        case 66:
-        case 67:
-        case 101:
-          tag = t.DiagnosticTag.Unnecessary;
-          break;
-        case 3:
-          tag = t.DiagnosticTag.Deprecated;
-          break;
-      }
-      parsedDiagnostics.push({
-        code: Number.isNaN(warningNumber) ? undefined : warningNumber,
-        severity: t.DiagnosticSeverity.Warning,
-        tag: tag,
-        content: [],
-      });
-    } else if (line.startsWith("  Syntax error!")) {
-      parsedDiagnostics.push({
-        code: undefined,
-        severity: t.DiagnosticSeverity.Error,
-        tag: undefined,
-        content: [],
-      });
-    } else if (line.startsWith("#Done(")) {
-      done = true;
-    } else if (/^  +[0-9]+ /.test(line)) {
-      // code display. Swallow
-    } else if (line.startsWith("  ")) {
-      parsedDiagnostics[parsedDiagnostics.length - 1].content.push(line);
-    }
+	let line = lines[i];
+	if (line.startsWith("  We've found a bug for you!")) {
+	  parsedDiagnostics.push({
+		code: undefined,
+		severity: t.DiagnosticSeverity.Error,
+		tag: undefined,
+		content: [],
+	  });
+	} else if (line.startsWith("  Warning number ")) {
+	  let warningNumber = parseInt(line.slice("  Warning number ".length));
+	  let tag: t.DiagnosticTag | undefined = undefined;
+	  switch (warningNumber) {
+		case 11:
+		case 20:
+		case 26:
+		case 27:
+		case 32:
+		case 33:
+		case 34:
+		case 35:
+		case 36:
+		case 37:
+		case 38:
+		case 39:
+		case 60:
+		case 66:
+		case 67:
+		case 101:
+		  tag = t.DiagnosticTag.Unnecessary;
+		  break;
+		case 3:
+		  tag = t.DiagnosticTag.Deprecated;
+		  break;
+	  }
+	  parsedDiagnostics.push({
+		code: Number.isNaN(warningNumber) ? undefined : warningNumber,
+		severity: t.DiagnosticSeverity.Warning,
+		tag: tag,
+		content: [],
+	  });
+	} else if (line.startsWith("  Syntax error!")) {
+	  parsedDiagnostics.push({
+		code: undefined,
+		severity: t.DiagnosticSeverity.Error,
+		tag: undefined,
+		content: [],
+	  });
+	} else if (line.startsWith("#Done(")) {
+	  done = true;
+	} else if (/^  +[0-9]+ /.test(line)) {
+	  // code display. Swallow
+	} else if (line.startsWith("  ")) {
+	  parsedDiagnostics[parsedDiagnostics.length - 1].content.push(line);
+	}
   }
 
   let result: filesDiagnostics = {};
   parsedDiagnostics.forEach((parsedDiagnostic) => {
-    let [fileAndRangeLine, ...diagnosticMessage] = parsedDiagnostic.content;
-    let { file, range } = parseFileAndRange(fileAndRangeLine);
-
-    if (result[file] == null) {
-      result[file] = [];
-    }
-    let cleanedUpDiagnostic =
-      diagnosticMessage
-        .map((line) => {
-          // remove the spaces in front
-          return line.slice(2);
-        })
-        .join("\n")
-        // remove start and end whitespaces/newlines
-        .trim() + "\n";
-    result[file].push({
-      severity: parsedDiagnostic.severity,
-      tags: parsedDiagnostic.tag === undefined ? [] : [parsedDiagnostic.tag],
-      code: parsedDiagnostic.code,
-      range,
-      source: "ReScript",
-      message: cleanedUpDiagnostic,
-    });
+	let [fileAndLocation, ...diagnosticMessage] = parsedDiagnostic.content;
+	let locationSeparator = fileAndLocation.indexOf(":");
+	let file = fileAndLocation.substring(2, locationSeparator);
+	let location = fileAndLocation.substring(locationSeparator + 1);
+	if (result[file] == null) {
+	  result[file] = [];
+	}
+	let cleanedUpDiagnostic =
+	  diagnosticMessage
+		.map((line) => {
+		  // remove the spaces in front
+		  return line.slice(2);
+		})
+		.join("\n")
+		// remove start and end whitespaces/newlines
+		.trim() + "\n";
+	result[file].push({
+	  severity: parsedDiagnostic.severity,
+	  tags: parsedDiagnostic.tag === undefined ? [] : [parsedDiagnostic.tag],
+	  code: parsedDiagnostic.code,
+	  range: parseDiagnosticLocation(location),
+	  source: "ReScript",
+	  message: cleanedUpDiagnostic,
+	});
   });
 
   return { done, result };
